@@ -126,5 +126,54 @@ export function startServerProcess(serial: string, videoPort: number): ChildProc
 export function connectVideoSocket(port: number): Promise<net.Socket> {
     return new Promise((resolve, reject) => {
         const socket = new net.Socket();
+        let connected = false;
+
+        const tryConnect = (attempt: number) => {
+            socket.connect(port, "127.0.0.1", () => {
+                connected = true;
+                resolve(socket);
+            });
+
+            socket.once("error", (err) => {
+                if (connected) return;
+                if (attempt < 20) {
+                    setTimeout(() => {
+                        socket.destroy();
+                        const s2 = new net.Socket();
+                        s2.once("error", () => {});
+                        tryConnectNew(s2, attempt + 1, resolve, reject, port);
+                    }, 300);
+                } else {
+                    reject(new Error(`Could not connect to video socket on port ${port}: ${err.message}`));
+                }
+            });
+        }
+
+        tryConnect(0);
     });
 }
+
+function tryConnectNew(
+    socket: net.Socket,
+    attempt: number,
+    resolve: (s: net.Socket) => void,
+    reject: (e: Error) => void,
+    port: number,
+) {
+    socket.connect(port, "127.0.0.1", () => {
+        resolve(socket);
+    });
+
+    socket.once("error", (err) => {
+        if (attempt < 20) {
+            socket.destroy();
+            const s2 = new net.Socket();
+            s2.once("error", () => {});
+            tryConnectNew(s2, attempt + 1, resolve, reject, port);
+        } else {
+            reject(new Error(`Could not connect to video socket on port ${port}: ${err.message}`));
+        }
+    });
+}
+
+
