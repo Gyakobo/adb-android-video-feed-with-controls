@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>scrcpy-server</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0e0e0f;
+      --surface: #1a1a1d;
+      --border: #2a2a2e;
+      --accent: #4f8ef7;
+      --red: #e05252;
+      --green: #52c788;
+      --text: #d4d4d8;
+      --muted: #71717a;
+      --radius: 8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 16px; font-weight: 600; letter-spacing: .5px; }
+    header h1 span { color: var(--accent); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-left: auto; }
+    .dot.connected { background: var(--green); }
+    #ws-status { font-size: 12px; color: var(--muted); }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    #toolbar label { color: var(--muted); font-size: 12px; margin-right: -4px; }
+    #toolbar select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button {
+      padding: 6px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+    button:hover { background: #26262a; border-color: #3a3a3e; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.primary:hover { background: #3a7ee0; }
+    button.danger { background: transparent; border-color: var(--red); color: var(--red); }
+    button.danger:hover { background: #2a1414; }
+
+    /* ── Device grid ── */
+    #grid {
+      flex: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 20px 24px;
+      align-items: flex-start;
+    }
+    .device-card {
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      min-width: 280px;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: #141416;
+    }
+    .card-header .serial { font-size: 11px; color: var(--muted); margin-left: auto; }
+    .card-header .status-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0;
+    }
+    .card-header .status-dot.live { background: var(--green); }
+    .card-title { font-size: 13px; font-weight: 500; }
+
+    /* ── Canvas wrapper ── */
+    .canvas-wrap {
+      position: relative;
+      background: #000;
+      cursor: crosshair;
+      user-select: none;
+    }
+    canvas { display: block; }
+    .overlay-msg {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; color: var(--muted);
+      pointer-events: none;
+    }
+
+    /* ── Card controls ── */
+    .card-controls {
+      display: flex;
+      gap: 6px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--border);
+      background: #141416;
+    }
+    .card-controls button {
+      flex: 1;
+      padding: 5px 6px;
+      font-size: 12px;
+    }
+    .card-controls .close-btn {
+      flex: 0 0 auto;
+      padding: 5px 10px;
+    }
+
+    /* ── Empty state ── */
+    #empty {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 80px 20px;
+      color: var(--muted);
+    }
+    #empty p { max-width: 320px; text-align: center; line-height: 1.6; }
+    #empty code {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    /* ── Log strip ── */
+    #log-strip {
+      padding: 6px 24px;
+      font-size: 11px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>scr<span>cpy</span>-server</h1>
+  <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+    <div class="dot" id="ws-dot"></div>
+    <span id="ws-status">connecting…</span>
+  </div>
+</header>
+
+<div id="toolbar">
+  <label>Device</label>
+  <select id="device-select"><option value="">— refresh to load —</option></select>
+  <button id="refresh-btn">↻ Refresh</button>
+  <button id="connect-btn" class="primary">▶ Connect</button>
+  <button id="connect-all-btn">⬛ Connect All</button>
+</div>
+
+<div id="grid">
+  <div id="empty">
+    <p>No active sessions.<br>Select a device above and click <strong>Connect</strong>, or use <strong>Connect All</strong> to mirror every attached device.</p>
+    <p>Make sure <code>adb devices</code> shows your device and USB debugging is enabled.</p>
+  </div>
+</div>
+
+<div id="log-strip">—</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+const sessions = new Map(); // serial -> { canvas, ctx, decoder, overlay }
+let ws = null;
+let wsReady = false;
+
+// ─── WS ──────────────────────────────────────────────────────────────────────
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.addEventListener('open', () => {
+    wsReady = true;
+    setWsStatus(true);
+    log('WebSocket connected');
+  });
+
+  ws.addEventListener('close', () => {
+    wsReady = false;
+    setWsStatus(false);
+    log('WebSocket disconnected — reconnecting in 2s…');
+    setTimeout(connectWs, 2000);
+  });
+
+  ws.addEventListener('message', (evt) => {
+    const msg = JSON.parse(evt.data);
+    handleServerMsg(msg);
+  });
+}
+
+function sendWs(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// ─── Server messages ──────────────────────────────────────────────────────────
+function handleServerMsg(msg) {
+  switch (msg.type) {
+    case 'sessionStarted':
+      onSessionStarted(msg.serial, msg.name);
+      break;
+    case 'sessionClosed':
+      onSessionClosed(msg.serial);
+      break;
+    case 'frame':
+      onFrame(msg);
+      break;
+    case 'error':
+      log(`[${msg.serial}] Error: ${msg.message}`);
+      break;
+  }
+}
+
+// ─── Device list ──────────────────────────────────────────────────────────────
+async function refreshDevices() {
+  try {
+    const res = await fetch('/api/devices');
+    const { devices } = await res.json();
+    const sel = document.getElementById('device-select');
+    sel.innerHTML = '';
+    if (devices.length === 0) {
+      sel.innerHTML = '<option value="">No devices found</option>';
+    } else {
+      devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.serial;
+        opt.textContent = `${d.model || d.serial} (${d.serial})`;
+        sel.appendChild(opt);
+      });
+    }
+    log(`Found ${devices.length} device(s)`);
+    return devices;
+  } catch (e) {
+    log('Failed to fetch devices: ' + e);
+    return [];
+  }
+}
+
+// ─── Session management ───────────────────────────────────────────────────────
+function startSession(serial) {
+  if (sessions.has(serial)) return;
+  createCard(serial);
+  sendWs({ type: 'startSession', serial });
+  log(`Starting session for ${serial}…`);
+}
+
+function stopSession(serial) {
+  sendWs({ type: 'stopSession', serial });
+}
+
+function onSessionStarted(serial, name) {
+  const s = sessions.get(serial);
+  if (!s) return;
+  s.name = name;
+  const titleEl = s.card.querySelector('.card-title');
+  if (titleEl) titleEl.textContent = name || serial;
+  const dot = s.card.querySelector('.status-dot');
+  if (dot) dot.classList.add('live');
+  setOverlay(serial, '');
+  log(`[${serial}] Session started — ${name}`);
+}
+
+function onSessionClosed(serial) {
+  const s = sessions.get(serial);
+  if (!s) return;
+  const dot = s.card.querySelector('.status-dot');
+  if (dot) dot.classList.remove('live');
+  setOverlay(serial, 'Session closed');
+  // Cleanup decoder
+  if (s.decoder) { try { s.decoder.close(); } catch(_){} }
+  sessions.delete(serial);
+  // Remove card
+  s.card.remove();
+  updateEmpty();
+  log(`[${serial}] Session closed`);
+}
+
+// ─── Card builder ─────────────────────────────────────────────────────────────
+function createCard(serial) {
+  const CARD_W = 360;
+  const CARD_H = 640;
+
+  const card = document.createElement('div');
+  card.className = 'device-card';
+  card.dataset.serial = serial;
+
+  card.innerHTML = `
+    <div class="card-header">
+      <div class="status-dot"></div>
+      <span class="card-title">${serial}</span>
+      <span class="serial">${serial}</span>
+    </div>
+    <div class="canvas-wrap" style="width:${CARD_W}px;height:${CARD_H}px">
+      <canvas width="${CARD_W}" height="${CARD_H}"></canvas>
+      <div class="overlay-msg">Waiting for stream…</div>
+    </div>
+    <div class="card-controls">
+      <button data-key="back">◀ Back</button>
+      <button data-key="home">⬤ Home</button>
+      <button data-key="appswitch">⧉ Recent</button>
+      <button class="close-btn danger" data-action="close">✕</button>
+    </div>
+  `;
+
+  const canvas = card.querySelector('canvas');
+  const ctx = canvas.getContext('2d');
+  const overlay = card.querySelector('.overlay-msg');
+  const wrap = card.querySelector('.canvas-wrap');
+
+  // Create VideoDecoder (WebCodecs API)
+  let decoder = null;
+  let codecConfig = null;
+
+  if (typeof VideoDecoder !== 'undefined') {
+    decoder = new VideoDecoder({
+      output(frame) {
+        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        frame.close();
+        if (overlay.textContent) overlay.textContent = '';
+      },
+      error(e) {
+        log(`[${serial}] Decoder error: ${e}`);
+      }
+    });
+  } else {
+    setOverlayEl(overlay, 'WebCodecs not supported in this browser');
+  }
+
+  // Touch events → control messages
+  function toDevCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: Math.round((e.clientX - rect.left) * (canvas.width / rect.width)),
+      y: Math.round((e.clientY - rect.top) * (canvas.height / rect.height)),
+      screenWidth: canvas.width,
+      screenHeight: canvas.height,
+    };
+  }
+
+  function sendTouch(action, e, pointerId = 0) {
+    const { x, y, screenWidth, screenHeight } = toDevCoords(e);
+    sendWs({ type: 'touch', serial, payload: { action, pointerId, x, y, screenWidth, screenHeight } });
+  }
+
+  canvas.addEventListener('mousedown', e => sendTouch('down', e));
+  canvas.addEventListener('mousemove', e => { if (e.buttons) sendTouch('move', e); });
+  canvas.addEventListener('mouseup', e => sendTouch('up', e));
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Touch events for mobile
+  canvas.addEventListener('touchstart', e => { e.preventDefault(); [...e.changedTouches].forEach(t => sendTouch('down', t, t.identifier)); });
+  canvas.addEventListener('touchmove', e => { e.preventDefault(); [...e.changedTouches].forEach(t => sendTouch('move', t, t.identifier)); });
+  canvas.addEventListener('touchend', e => { e.preventDefault(); [...e.changedTouches].forEach(t => sendTouch('up', t, t.identifier)); });
+
+  // Button bar
+  card.querySelectorAll('[data-key]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      sendWs({ type: 'key', serial, key: btn.dataset.key });
+    });
+  });
+  card.querySelector('[data-action="close"]').addEventListener('click', () => {
+    stopSession(serial);
+  });
+
+  const session = { card, canvas, ctx, decoder, overlay, codecConfig };
+  sessions.set(serial, session);
+
+  document.getElementById('grid').appendChild(card);
+  updateEmpty();
+}
+
+// ─── Frame rendering ──────────────────────────────────────────────────────────
+function onFrame(msg) {
+  const s = sessions.get(msg.serial);
+  if (!s || !s.decoder) return;
+
+  const data = base64ToUint8Array(msg.data);
+
+  if (s.decoder.state === 'unconfigured' || msg.isConfig) {
+    // First config packet — configure the decoder with H.264 codec
+    if (msg.isConfig) {
+      s.codecConfig = data;
+      try {
+        if (s.decoder.state !== 'unconfigured') s.decoder.reset();
+        s.decoder.configure({
+          codec: 'avc1.42001f', // H.264 Baseline
+          optimizeForLatency: true,
+        });
+        s.decoder.decode(new EncodedVideoChunk({
+          type: 'key',
+          timestamp: 0,
+          data,
+        }));
+      } catch(e) {
+        log(`[${msg.serial}] Decoder config error: ${e}`);
+      }
+      return;
+    }
+  }
+
+  if (s.decoder.state === 'configured') {
+    try {
+      const pts = parseInt(msg.pts, 10);
+      s.decoder.decode(new EncodedVideoChunk({
+        type: msg.isConfig ? 'key' : 'delta',
+        timestamp: pts,
+        data,
+      }));
+    } catch(e) {
+      // ignore decode errors on individual frames
+    }
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function base64ToUint8Array(b64) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+function setOverlay(serial, msg) {
+  const s = sessions.get(serial);
+  if (s) setOverlayEl(s.overlay, msg);
+}
+
+function setOverlayEl(el, msg) {
+  el.textContent = msg;
+}
+
+function setWsStatus(connected) {
+  document.getElementById('ws-dot').className = 'dot' + (connected ? ' connected' : '');
+  document.getElementById('ws-status').textContent = connected ? 'connected' : 'disconnected';
+}
+
+function updateEmpty() {
+  const empty = document.getElementById('empty');
+  empty.style.display = sessions.size === 0 ? 'flex' : 'none';
+}
+
+function log(msg) {
+  console.log(msg);
+  document.getElementById('log-strip').textContent = msg;
+}
+
+// ─── Toolbar wiring ───────────────────────────────────────────────────────────
+document.getElementById('refresh-btn').addEventListener('click', refreshDevices);
+
+document.getElementById('connect-btn').addEventListener('click', () => {
+  const sel = document.getElementById('device-select');
+  if (sel.value) startSession(sel.value);
+});
+
+document.getElementById('connect-all-btn').addEventListener('click', async () => {
+  const devices = await refreshDevices();
+  devices.forEach(d => startSession(d.serial));
+});
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+connectWs();
+refreshDevices();
+</script>
+</body>
+</html>
